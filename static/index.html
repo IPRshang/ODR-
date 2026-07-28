@@ -1,0 +1,1970 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>维权快速响应系统</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- ====== 侧边栏 ====== -->
+<aside class="sidebar">
+  <div class="sidebar-logo">
+    <div class="logo-icon">IP</div>
+    <div class="logo-text">维权快速响应</div>
+  </div>
+  <nav class="sidebar-nav">
+    <div class="nav-section">概览</div>
+    <button class="nav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+      <span class="nav-icon">📊</span> 工作台
+    </button>
+    
+    <div class="nav-section" style="margin-top:8px">案件管理</div>
+    <button class="nav-item" data-page="case-list" onclick="navigate('case-list')">
+      <span class="nav-icon">📋</span> 案件列表
+    </button>
+    <button class="nav-item" data-page="new-case" onclick="navigate('new-case')">
+      <span class="nav-icon">➕</span> 线索提报
+    </button>
+
+    <div class="nav-section" style="margin-top:8px">资源库</div>
+    <button class="nav-item" data-page="patents" onclick="navigate('patents')">
+      <span class="nav-icon">📜</span> 专利库
+    </button>
+    <button class="nav-item" data-page="competitors" onclick="navigate('competitors')">
+      <span class="nav-icon">🔍</span> 竞对监控
+    </button>
+
+    <div class="nav-section" style="margin-top:8px">工具</div>
+    <button class="nav-item" data-page="deadlines" onclick="navigate('deadlines')">
+      <span class="nav-icon">⏰</span> 期限预警
+    </button>
+    <button class="nav-item" data-page="patsnap" onclick="navigate('patsnap')">
+      <span class="nav-icon">🔬</span> 智慧芽检索
+    </button>
+  </nav>
+</aside>
+
+<!-- ====== 主内容区 ====== -->
+<main class="main-content" id="main-content">
+  <div id="page-content"></div>
+</main>
+
+<!-- ====== 模态框容器 ====== -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-box"></div>
+</div>
+
+<!-- ====== Toast 容器 ====== -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+// ==========================================
+// API 工具
+// ==========================================
+const API = {
+  async get(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+  async post(url, data) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  },
+  async put(url, data) {
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+};
+
+// ==========================================
+// 路由 & 导航
+// ==========================================
+let currentPage = 'dashboard';
+let currentCaseId = null;
+
+function navigate(page, params) {
+  currentPage = page;
+  if (params) currentCaseId = params.caseId;
+  
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const navItem = document.querySelector(`[data-page="${page}"]`);
+  if (navItem) navItem.classList.add('active');
+  
+  renderPage(page, params);
+}
+
+function renderPage(page, params) {
+  const container = document.getElementById('page-content');
+  switch(page) {
+    case 'dashboard': renderDashboard(container); break;
+    case 'case-list': renderCaseList(container); break;
+    case 'new-case': renderNewCaseForm(container); break;
+    case 'case-detail': renderCaseDetail(container, params); break;
+    case 'patents': renderPatentLibrary(container); break;
+    case 'competitors': renderCompetitorMonitor(container); break;
+    case 'deadlines': renderDeadlineMonitor(container); break;
+    case 'patsnap': renderPatSnapPage(container); break;
+    default: container.innerHTML = '<div class="empty-state"><h3>页面未找到</h3></div>';
+  }
+}
+
+// ==========================================
+// Toast 通知
+// ==========================================
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 3000);
+}
+
+// ==========================================
+// 模态框
+// ==========================================
+function openModal(title, bodyHTML, footerHTML = '') {
+  const overlay = document.getElementById('modal-overlay');
+  const box = document.getElementById('modal-box');
+  box.innerHTML = `
+    <div class="modal-header">
+      <h2>${title}</h2>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">${bodyHTML}</div>
+    ${footerHTML ? `<div class="modal-footer">${footerHTML}</div>` : ''}
+  `;
+  overlay.classList.add('show');
+}
+
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+// 点击遮罩关闭
+document.getElementById('modal-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// ==========================================
+// 工具函数
+// ==========================================
+const stageNames = ['', '线索提报', '初步评估', '决策审批', '证据保全', '侵权比对', '法律行动'];
+const stageStatusLabels = {
+  pending: '待处理', in_progress: '处理中', completed: '已完成', rejected: '已驳回'
+};
+const priorityLabels = { high: '高', normal: '中', low: '低' };
+const priorityBadges = { high: 'badge-danger', normal: 'badge-warning', low: 'badge-gray' };
+
+function stageBadge(stage) {
+  const colors = {1:'badge-primary',2:'badge-warning',3:'badge-warning',4:'badge-primary',5:'badge-primary',6:'badge-success'};
+  return `<span class="badge ${colors[stage]||'badge-gray'}">${stageNames[stage]}</span>`;
+}
+
+function statusBadge(status) {
+  const map = { pending:'badge-gray', in_progress:'badge-warning', completed:'badge-success', rejected:'badge-danger' };
+  return `<span class="badge ${map[status]||'badge-gray'}">${stageStatusLabels[status]||status}</span>`;
+}
+
+function formatTime(t) {
+  if (!t) return '-';
+  return t.replace('T', ' ').substring(0, 16);
+}
+
+// ==========================================
+// 页面：工作台 Dashboard
+// ==========================================
+async function renderDashboard(container) {
+  container.innerHTML = '<div style="text-align:center;padding:60px">加载中...</div>';
+  try {
+    const [stats, activities] = await Promise.all([
+      API.get('/api/dashboard/stats'),
+      API.get('/api/dashboard/activities?limit=15')
+    ]);
+    
+    const total = stats.total_cases;
+    const sd = stats.stage_distribution;
+    const ss = stats.status_distribution;
+    
+    container.innerHTML = `
+      <div class="page-header">
+        <h1>📊 工作台</h1>
+        <div class="header-actions">
+          <button class="btn btn-primary btn-lg" onclick="navigate('new-case')">➕ 新建线索提报</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">全部案件</div>
+          <div class="stat-value">${total}</div>
+          <div class="stat-sub">本月新增 ${stats.monthly_new} 件</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">评估中</div>
+          <div class="stat-value">${sd.stage_2||0}</div>
+          <div class="stat-sub">待初步评估</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">审批中</div>
+          <div class="stat-value">${sd.stage_3||0}</div>
+          <div class="stat-sub">待管理层决策</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">法律行动中</div>
+          <div class="stat-value">${sd.stage_6||0}</div>
+          <div class="stat-sub">诉讼/维权进行中</div>
+        </div>
+        <div class="stat-card" style="border-left:3px solid var(--danger)">
+          <div class="stat-label">⚠️ 紧急期限</div>
+          <div class="stat-value" style="color:var(--danger)">${stats.urgent_deadlines}</div>
+          <div class="stat-sub">7天内到期</div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px">
+        <!-- 阶段分布 -->
+        <div class="card">
+          <div class="card-header"><h3>案件阶段分布</h3></div>
+          <div class="card-body">
+            ${renderStageChart(sd)}
+          </div>
+        </div>
+
+        <!-- 状态统计 -->
+        <div class="card">
+          <div class="card-header"><h3>状态概览</h3></div>
+          <div class="card-body">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              ${['pending','in_progress','completed','rejected'].map(s => `
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span>${statusBadge(s)} ${stageStatusLabels[s]}</span>
+                  <strong style="font-size:18px">${ss[s]||0}</strong>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 最近动态 -->
+      <div class="card" style="margin-top:20px">
+        <div class="card-header"><h3>📌 最近动态</h3></div>
+        <div class="card-body">
+          ${activities.length === 0 ? '<div class="empty-state"><h3>暂无动态</h3></div>' : `
+            <div class="timeline">
+              ${activities.map(a => `
+                <div class="timeline-item">
+                  <div class="tl-time">${formatTime(a.created_at)} · ${a.case_no}</div>
+                  <div class="tl-title">${a.event_title}</div>
+                  <div class="tl-detail">${a.event_detail || a.case_title}</div>
+                </div>
+              `).join('')}
+            </div>
+          `}
+        </div>
+      </div>
+
+      <!-- 智慧芽集成状态 -->
+      <div class="card" style="margin-top:20px">
+        <div class="card-header"><h3>🔬 智慧芽集成状态</h3></div>
+        <div class="card-body" id="patsnap-status-dash">
+          <div style="display:flex;align-items:center;gap:8px;color:var(--text-secondary)">
+            <span>检查中...</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // 异步加载智慧芽状态
+    fetchPatSnapDashStatus();
+  } catch(e) {
+    container.innerHTML = `<div class="empty-state"><h3>加载失败</h3><p>${e.message}</p></div>`;
+  }
+}
+
+function renderStageChart(sd) {
+  const stages = [
+    {name:'线索提报', count:sd.stage_1||0, color:'#1a73e8'},
+    {name:'初步评估', count:sd.stage_2||0, color:'#f59e0b'},
+    {name:'决策审批', count:sd.stage_3||0, color:'#f59e0b'},
+    {name:'证据保全', count:sd.stage_4||0, color:'#1a73e8'},
+    {name:'侵权比对', count:sd.stage_5||0, color:'#1a73e8'},
+    {name:'法律行动', count:sd.stage_6||0, color:'#0d9488'},
+  ];
+  const max = Math.max(...stages.map(s=>s.count), 1);
+  
+  return stages.map(s => `
+    <div style="margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:13px">
+        <span>${s.name}</span>
+        <strong>${s.count}</strong>
+      </div>
+      <div style="background:var(--gray-200);border-radius:4px;height:8px;overflow:hidden">
+        <div style="background:${s.color};height:100%;width:${(s.count/max*100).toFixed(1)}%;border-radius:4px;transition:width 0.5s ease"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function fetchPatSnapDashStatus() {
+  try {
+    const resp = await fetch('/api/patsnap/config');
+    const config = await resp.json();
+    const el = document.getElementById('patsnap-status-dash');
+    if (!el) return;
+    if (config.configured) {
+      el.innerHTML = `<div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:24px">✅</span>
+        <div>
+          <strong style="color:var(--success)">已连接</strong>
+          <span style="color:var(--text-secondary);font-size:13px;margin-left:8px">API Key: ${config.api_key_masked}</span>
+          <br><span style="font-size:13px;color:var(--text-secondary)">专利语义检索、图像检索、法律状态查询可用</span>
+        </div>
+        <a href="#" onclick="navigate('patsnap');return false" style="margin-left:auto;font-size:13px;color:var(--primary)">前往检索 →</a>
+      </div>`;
+    } else {
+      el.innerHTML = `<div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:24px">⚠️</span>
+        <div>
+          <strong style="color:var(--warning)">未配置 API Key</strong>
+          <br><span style="font-size:13px;color:var(--text-secondary)">去 <a href="https://open.patsnap.com/devportal" target="_blank" style="color:var(--primary)">智慧芽开放平台</a> 免费注册获取 Key（10,000 credits）</span>
+        </div>
+        <a href="#" onclick="navigate('patsnap');return false" style="margin-left:auto;font-size:13px;color:var(--primary)">前往配置 →</a>
+      </div>`;
+    }
+  } catch(e) {
+    const el = document.getElementById('patsnap-status-dash');
+    if (el) el.innerHTML = '<span style="color:var(--text-secondary)">状态检查失败</span>';
+  }
+}
+
+// ==========================================
+// 页面：案件列表
+// ==========================================
+async function renderCaseList(container) {
+  container.innerHTML = `
+    <div class="page-header">
+      <h1>📋 案件列表</h1>
+      <div class="header-actions">
+        <button class="btn btn-primary" onclick="navigate('new-case')">➕ 新建案件</button>
+      </div>
+    </div>
+    <div class="search-bar">
+      <input class="form-input" id="case-search" placeholder="🔍 搜索案件编号/名称/竞对..." oninput="filterCases()">
+      <select class="form-select" id="stage-filter" style="width:140px" onchange="filterCases()">
+        <option value="">全部阶段</option>
+        ${stageNames.slice(1).map((n,i) => `<option value="${i+1}">${n}</option>`).join('')}
+      </select>
+      <select class="form-select" id="status-filter" style="width:120px" onchange="filterCases()">
+        <option value="">全部状态</option>
+        <option value="pending">待处理</option>
+        <option value="in_progress">处理中</option>
+        <option value="completed">已完成</option>
+        <option value="rejected">已驳回</option>
+      </select>
+    </div>
+    <div class="card" id="case-table-container">
+      <div style="text-align:center;padding:40px">加载中...</div>
+    </div>
+  `;
+  await filterCases();
+}
+
+async function filterCases() {
+  const container = document.getElementById('case-table-container');
+  if (!container) return;
+  
+  const keyword = document.getElementById('case-search')?.value || '';
+  const stage = document.getElementById('stage-filter')?.value || '';
+  const status = document.getElementById('status-filter')?.value || '';
+  
+  const params = new URLSearchParams();
+  if (keyword) params.set('keyword', keyword);
+  if (stage) params.set('stage', stage);
+  if (status) params.set('status', status);
+  
+  try {
+    const cases = await API.get(`/api/cases?${params}`);
+    if (cases.length === 0) {
+      container.innerHTML = '<div class="card-body"><div class="empty-state"><div class="empty-icon">📭</div><h3>暂无案件</h3><p>点击"新建案件"开始提报线索</p></div></div>';
+      return;
+    }
+    
+    container.innerHTML = `
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>案件编号</th>
+              <th>案件名称</th>
+              <th>竞对公司</th>
+              <th>当前阶段</th>
+              <th>状态</th>
+              <th>优先级</th>
+              <th>提报人</th>
+              <th>更新时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${cases.map(c => `
+              <tr class="clickable" onclick="navigate('case-detail',{caseId:'${c.id}'})">
+                <td><strong style="color:var(--primary)">${c.case_no}</strong></td>
+                <td>${c.title}</td>
+                <td>${c.competitor_name || '-'}</td>
+                <td>${stageBadge(c.current_stage)}</td>
+                <td>${statusBadge(c.stage_status)}</td>
+                <td><span class="badge ${priorityBadges[c.priority]||'badge-gray'}">${priorityLabels[c.priority]||c.priority}</span></td>
+                <td>${c.reporter || '-'}</td>
+                <td>${formatTime(c.updated_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch(e) {
+    container.innerHTML = `<div class="card-body"><div class="empty-state"><h3>加载失败</h3><p>${e.message}</p></div></div>`;
+  }
+}
+
+// ==========================================
+// 页面：新建线索提报
+// ==========================================
+function renderNewCaseForm(container) {
+  container.innerHTML = `
+    <div class="page-header">
+      <h1>➕ 线索提报</h1>
+    </div>
+
+    <div class="guide-box">
+      <span class="guide-icon">💡</span>
+      <div>
+        <strong>操作指引：</strong>
+        销售/研发人员发现侵权线索后，在此填写基本信息提交。<br>
+        提交后系统将自动通知IP部负责人进行初步评估。
+        <br><small>建议通过企业微信审批模板或群机器人同步推送线索信息。</small>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header"><h3>线索基本信息</h3></div>
+      <div class="card-body">
+        <form id="lead-form" onsubmit="submitLead(event)">
+          <div class="form-row">
+            <div class="form-group">
+              <label>案件名称 <span class="required">*</span></label>
+              <input class="form-input" name="title" required placeholder="如：XX公司涉嫌侵犯XX专利">
+            </div>
+            <div class="form-group">
+              <label>优先级</label>
+              <select class="form-select" name="priority">
+                <option value="normal">中</option>
+                <option value="high">高</option>
+                <option value="low">低</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>线索发现人 <span class="required">*</span></label>
+              <input class="form-input" name="reporter" required placeholder="姓名">
+            </div>
+            <div class="form-group">
+              <label>所属部门</label>
+              <select class="form-select" name="reporter_dept">
+                <option value="">请选择</option>
+                <option value="销售部">销售部</option>
+                <option value="研发部">研发部</option>
+                <option value="市场部">市场部</option>
+                <option value="IP部">IP部</option>
+                <option value="法务部">法务部</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>发现时间</label>
+              <input class="form-input" name="report_time" type="datetime-local" value="${new Date().toISOString().slice(0,16)}">
+            </div>
+            <div class="form-group">
+              <label>发现地点</label>
+              <input class="form-input" name="report_location" placeholder="如：XX展会/XX电商平台/XX门店">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>竞争对手名称 <span class="required">*</span></label>
+              <input class="form-input" name="competitor_name" required placeholder="涉嫌侵权公司全称">
+            </div>
+            <div class="form-group">
+              <label>涉嫌侵权产品</label>
+              <input class="form-input" name="infringing_product" placeholder="产品名称/型号">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>线索描述 <span class="required">*</span></label>
+            <textarea class="form-textarea" name="lead_description" required 
+              placeholder="请详细描述发现的侵权线索，包括：侵权方式、涉及技术、已掌握的证据等"></textarea>
+          </div>
+          <div class="form-group">
+            <label>附件链接（照片/视频/文档URL，每行一个）</label>
+            <textarea class="form-textarea" name="lead_attachments" rows="3"
+              placeholder="https://...&#10;https://..."></textarea>
+            <div class="form-hint">暂不支持直接上传，请粘贴附件链接或稍后在案件详情中补充</div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:24px">
+            <button type="submit" class="btn btn-primary btn-lg">📤 提交线索</button>
+            <button type="button" class="btn btn-outline btn-lg" onclick="navigate('case-list')">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  `;
+}
+
+async function submitLead(e) {
+  e.preventDefault();
+  const form = e.target;
+  const data = Object.fromEntries(new FormData(form));
+  const attachments = data.lead_attachments
+    ? data.lead_attachments.split('\n').map(s=>s.trim()).filter(s=>s)
+    : [];
+  
+  try {
+    const result = await API.post('/api/cases', {
+      ...data,
+      lead_attachments: attachments
+    });
+    showToast(`✅ 线索提报成功！案件编号：${result.case_no}`);
+    navigate('case-detail', { caseId: result.id });
+  } catch(err) {
+    showToast('❌ 提报失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 页面：案件详情
+// ==========================================
+async function renderCaseDetail(container, params) {
+  if (!params || !params.caseId) {
+    container.innerHTML = '<div class="empty-state"><h3>未指定案件</h3></div>';
+    return;
+  }
+  
+  container.innerHTML = '<div style="text-align:center;padding:60px">加载中...</div>';
+  
+  try {
+    const c = await API.get(`/api/cases/${params.caseId}`);
+    currentCaseId = c.id;
+    
+    container.innerHTML = `
+      <div class="page-header">
+        <div>
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+            <button class="btn btn-outline btn-sm" onclick="navigate('case-list')">← 返回</button>
+            <h1>${c.case_no} ${c.title}</h1>
+            ${stageBadge(c.current_stage)}
+            ${statusBadge(c.stage_status)}
+          </div>
+          <div style="color:var(--gray-500);font-size:13px">
+            提报人：${c.reporter || '-'} · ${c.reporter_dept || '-'} · ${formatTime(c.created_at)}
+          </div>
+        </div>
+      </div>
+
+      <!-- 工作流步骤 -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header"><h3>维权流程进度</h3></div>
+        <div class="card-body">
+          ${renderWorkflowSteps(c)}
+        </div>
+      </div>
+
+      <!-- 基本信息 -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-header"><h3>📝 基本信息</h3></div>
+        <div class="card-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div><strong>竞对公司：</strong>${c.competitor_name || '-'}</div>
+            <div><strong>侵权产品：</strong>${c.infringing_product || '-'}</div>
+            <div><strong>发现地点：</strong>${c.report_location || '-'}</div>
+            <div><strong>发现时间：</strong>${formatTime(c.report_time)}</div>
+          </div>
+          <div style="margin-top:12px">
+            <strong>线索描述：</strong>
+            <p style="white-space:pre-wrap;color:var(--gray-600);margin-top:4px">${c.lead_description || '-'}</p>
+          </div>
+          ${renderAttachments(c.lead_attachments)}
+        </div>
+      </div>
+
+      <!-- 阶段操作区 -->
+      <div class="card" style="margin-bottom:20px" id="stage-action-area"></div>
+
+      <!-- 详情标签页 -->
+      <div class="card">
+        <div class="tabs" style="padding:0 20px">
+          <button class="tab active" onclick="switchCaseTab('timeline',this)">📌 时间线</button>
+          <button class="tab" onclick="switchCaseTab('evidence',this)">📎 证据 (${(c.evidence||[]).length})</button>
+          <button class="tab" onclick="switchCaseTab('documents',this)">📄 文档 (${(c.documents||[]).length})</button>
+          <button class="tab" onclick="switchCaseTab('deadlines',this)">⏰ 期限 (${(c.deadlines||[]).length})</button>
+        </div>
+        <div class="card-body" id="case-tab-content"></div>
+      </div>
+    `;
+    
+    // 渲染阶段操作区
+    renderStageActions(c);
+    // 渲染时间线
+    switchCaseTab('timeline', document.querySelector('.tab.active'));
+    
+  } catch(e) {
+    container.innerHTML = `<div class="empty-state"><h3>加载失败</h3><p>${e.message}</p></div>`;
+  }
+}
+
+function renderWorkflowSteps(c) {
+  const stages = [
+    {step:1, name:'线索提报', desc:'销售/研发'},
+    {step:2, name:'初步评估', desc:'IP部'},
+    {step:3, name:'决策审批', desc:'管理层'},
+    {step:4, name:'证据保全', desc:'IP部/法务'},
+    {step:5, name:'侵权比对', desc:'IP部'},
+    {step:6, name:'法律行动', desc:'法务/IP部'},
+  ];
+  
+  // 判断各阶段状态
+  const completed = new Set();
+  if (c.current_stage >= 1) completed.add(1);
+  if (c.assessment_result) completed.add(2);
+  if (c.approval_decision) completed.add(3);
+  if (c.evidence_status === 'in_progress' || c.evidence_status === 'completed') completed.add(4);
+  if (c.comparison_status === 'completed') completed.add(5);
+  
+  return `
+    <div class="workflow-steps">
+      ${stages.map(s => {
+        let cls = '';
+        if (s.step === c.current_stage && c.stage_status !== 'completed') cls = 'active';
+        else if (completed.has(s.step) || s.step < c.current_stage) cls = 'completed';
+        return `
+          <div class="workflow-step ${cls}">
+            <div class="step-number">${cls==='completed' ? '✓' : s.step}</div>
+            <div class="step-title">${s.name}</div>
+            <div class="step-desc">${s.desc}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderAttachments(attachmentsStr) {
+  try {
+    const atts = typeof attachmentsStr === 'string' ? JSON.parse(attachmentsStr) : (attachmentsStr || []);
+    if (!atts.length) return '';
+    return `
+      <div style="margin-top:12px">
+        <strong>附件：</strong>
+        <ul class="file-list">
+          ${atts.map(a => `<li><span class="file-icon">🔗</span> <a href="${a}" target="_blank">${a}</a></li>`).join('')}
+        </ul>
+      </div>
+    `;
+  } catch { return ''; }
+}
+
+// ==========================================
+// 阶段操作区
+// ==========================================
+function renderStageActions(c) {
+  const area = document.getElementById('stage-action-area');
+  if (!area) return;
+  
+  // 第一步完成 - 引导进入评估
+  if (c.current_stage === 1) {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 下一步：初步评估</h3></div>
+      <div class="card-body">
+        <div class="guide-box">
+          <span class="guide-icon">💡</span>
+          <div>
+            <strong>操作指引：</strong>
+            IP部收到线索后，登录<strong>智慧芽专利检索网站</strong>进行专利匹配检索和AI特征比对。<br>
+            确定可匹配的公司已授权专利后，在此录入评估结论。
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="openAssessmentForm()">🔍 开始初步评估</button>
+      </div>
+    `;
+  }
+  
+  // 第二步完成 - 引导审批
+  else if (c.current_stage === 2 && c.assessment_result && !c.approval_decision) {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 下一步：决策审批</h3></div>
+      <div class="card-body">
+        <div class="guide-box">
+          <span class="guide-icon">💡</span>
+          <div>
+            <strong>操作指引：</strong>
+            评估结论已生成（${c.assessment_result}），请提交管理层审批决定是否启动维权程序。
+            <br><small>建议通过企业微信审批流程推送至管理层，支持同意/驳回/退回修改。</small>
+          </div>
+        </div>
+        <button class="btn btn-warning btn-lg" onclick="openApprovalForm()">⚖️ 提交管理层审批</button>
+      </div>
+    `;
+  }
+  
+  // 第三步完成（通过）- 引导证据保全
+  else if (c.approval_decision === 'approved' && c.current_stage <= 3) {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 下一步：证据保全</h3></div>
+      <div class="card-body">
+        <div class="guide-box">
+          <span class="guide-icon">💡</span>
+          <div>
+            <strong>操作指引：</strong>
+            维权已获批准！请尽快安排现场取证，通过企业微信群派发取证任务。<br>
+            证据回传后上传至智慧芽专利管理系统归档，并为案件设置关键期限提醒。
+          </div>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" onclick="openEvidenceForm()">📎 添加证据</button>
+          <button class="btn btn-outline" onclick="openDeadlineForm()">⏰ 设置期限</button>
+        </div>
+      </div>
+    `;
+  }
+  
+  // 证据收集后 - 侵权比对
+  else if ((c.evidence_status === 'in_progress' || c.evidence_status === 'completed') && c.current_stage <= 4 && c.approval_decision === 'approved') {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 下一步：侵权比对</h3></div>
+      <div class="card-body">
+        <div class="guide-box">
+          <span class="guide-icon">💡</span>
+          <div>
+            <strong>操作指引：</strong>
+            使用智慧芽"防侵权检索Agent"进行正式侵权比对，输出《侵权比对报告》。<br>
+            如涉及外观专利，使用"外观防侵权检索Agent"进行图像搜索比对。
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="openComparisonForm()">📊 录入侵权比对报告</button>
+      </div>
+    `;
+  }
+  
+  // 比对完成 - 法律行动
+  else if (c.comparison_status === 'completed' && c.current_stage <= 5) {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 下一步：法律行动</h3></div>
+      <div class="card-body">
+        <div class="guide-box">
+          <span class="guide-icon">💡</span>
+          <div>
+            <strong>操作指引：</strong>
+            比对报告已生成，可据此启动法律行动。<br>
+            在智慧芽专利管理系统中全程跟踪诉讼进展、管理费用与期限。
+          </div>
+        </div>
+        <button class="btn btn-success btn-lg" onclick="openLegalForm()">⚖️ 更新法律行动状态</button>
+      </div>
+    `;
+  }
+  
+  // 已驳回
+  else if (c.approval_decision === 'rejected') {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 案件状态</h3></div>
+      <div class="card-body">
+        <span class="badge badge-danger" style="font-size:14px;padding:6px 16px">⛔ 管理层已驳回，维权不启动</span>
+        <p style="margin-top:8px;color:var(--gray-500)">驳回原因：${c.approval_comment || '未填写'}</p>
+      </div>
+    `;
+  }
+  
+  // 法律行动中
+  else if (c.current_stage >= 6) {
+    area.innerHTML = `
+      <div class="card-header"><h3>📋 法律行动进行中</h3></div>
+      <div class="card-body">
+        <span class="badge badge-success" style="font-size:14px;padding:6px 16px">⚖️ 当前阶段：${c.legal_stage || '法律行动中'}</span>
+        <p style="margin-top:8px;white-space:pre-wrap;color:var(--gray-600)">${c.legal_notes || ''}</p>
+        <button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="openLegalForm()">更新状态</button>
+      </div>
+    `;
+  }
+}
+
+// ==========================================
+// 模态表单：初步评估
+// ==========================================
+function openAssessmentForm() {
+  openModal('🔍 初步评估', `
+    <div class="guide-box">
+      <span class="guide-icon">💡</span>
+      <div>请先登录<strong>智慧芽专利检索网站</strong>完成专利匹配检索和AI特征比对，再填写以下评估结论。</div>
+    </div>
+    <form id="assessment-form" onsubmit="submitAssessment(event)">
+      <div class="form-group">
+        <label>评估人 <span class="required">*</span></label>
+        <input class="form-input" name="assessor" required placeholder="IP部评估人姓名">
+      </div>
+      <div class="form-group">
+        <label>评估结论 <span class="required">*</span></label>
+        <select class="form-select" name="assessment_result" required>
+          <option value="">请选择</option>
+          <option value="可诉">可诉 - 发现明确侵权证据</option>
+          <option value="不可诉">不可诉 - 侵权证据不足</option>
+          <option value="需补充信息">需补充信息</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>匹配的公司专利（专利号，每行一个）</label>
+        <textarea class="form-textarea" name="matched_patents" rows="3" placeholder="CN2024XXXXXX.X&#10;CN2023XXXXXX.X"></textarea>
+      </div>
+      <div class="form-group">
+        <label>评估详细说明</label>
+        <textarea class="form-textarea" name="assessment_detail" rows="4" placeholder="请详细描述：侵权技术对比分析、初步判断依据等"></textarea>
+      </div>
+      <div class="form-group">
+        <label>竞对监控备注</label>
+        <textarea class="form-textarea" name="competitor_monitor" rows="3" placeholder="竞对相关专利动态、法律状态变化等"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">✅ 提交评估</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitAssessment(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  data.matched_patents = data.matched_patents.split('\n').map(s=>s.trim()).filter(s=>s);
+  data.competitor_monitor = data.competitor_monitor.split('\n').map(s=>s.trim()).filter(s=>s);
+  
+  try {
+    await API.put(`/api/cases/${currentCaseId}/assessment`, data);
+    showToast('✅ 评估提交成功');
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 提交失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 模态表单：决策审批
+// ==========================================
+function openApprovalForm() {
+  openModal('⚖️ 决策审批', `
+    <form id="approval-form" onsubmit="submitApproval(event)">
+      <div class="form-group">
+        <label>审批人 <span class="required">*</span></label>
+        <input class="form-input" name="approver" required placeholder="管理层审批人姓名">
+      </div>
+      <div class="form-group">
+        <label>审批决定 <span class="required">*</span></label>
+        <select class="form-select" name="approval_decision" required onchange="toggleApprovalFields(this.value)">
+          <option value="">请选择</option>
+          <option value="approved">✅ 同意 - 启动维权程序</option>
+          <option value="rejected">❌ 驳回 - 不予启动</option>
+          <option value="returned">↩️ 退回修改</option>
+        </select>
+      </div>
+      <div id="approval-extra" style="display:none">
+        <div class="form-row">
+          <div class="form-group">
+            <label>预估成本（万元）</label>
+            <input class="form-input" name="estimated_cost" type="number" placeholder="如：50">
+          </div>
+          <div class="form-group">
+            <label>审批状态</label>
+            <select class="form-select" name="approval_status">
+              <option value="approved">已通过</option>
+              <option value="pending">待定</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>建议方案</label>
+          <textarea class="form-textarea" name="suggested_plan" rows="3" placeholder="如：发送律师函→协商→诉讼"></textarea>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>审批意见</label>
+        <textarea class="form-textarea" name="approval_comment" rows="3" placeholder="审批意见或驳回原因"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-warning">📋 提交审批</button>
+      </div>
+    </form>
+  `);
+}
+
+function toggleApprovalFields(value) {
+  document.getElementById('approval-extra').style.display = value === 'approved' ? 'block' : 'none';
+}
+
+async function submitApproval(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  data.estimated_cost = parseFloat(data.estimated_cost) || 0;
+  
+  try {
+    await API.put(`/api/cases/${currentCaseId}/approval`, data);
+    const decisionText = data.approval_decision === 'approved' ? '批准启动维权' : 
+                         data.approval_decision === 'rejected' ? '已驳回' : '退回修改';
+    showToast(`✅ 审批完成：${decisionText}`);
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 提交失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 模态表单：添加证据
+// ==========================================
+function openEvidenceForm() {
+  openModal('📎 添加证据', `
+    <form id="evidence-form" onsubmit="submitEvidence(event)">
+      <div class="form-row">
+        <div class="form-group">
+          <label>文件名称 <span class="required">*</span></label>
+          <input class="form-input" name="file_name" required placeholder="如：公证书_20240601.pdf">
+        </div>
+        <div class="form-group">
+          <label>证据类型</label>
+          <select class="form-select" name="evidence_type">
+            <option value="公证书">公证书</option>
+            <option value="照片">照片</option>
+            <option value="视频">视频</option>
+            <option value="时间戳证书">时间戳证书</option>
+            <option value="购买凭证">购买凭证</option>
+            <option value="网页截图">网页截图</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>文件类型</label>
+          <input class="form-input" name="file_type" placeholder="pdf / jpg / mp4 / ...">
+        </div>
+        <div class="form-group">
+          <label>上传人</label>
+          <input class="form-input" name="uploader" placeholder="姓名">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea class="form-textarea" name="description" rows="2" placeholder="证据来源、取证时间、备注等"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">📎 添加</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitEvidence(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.post(`/api/cases/${currentCaseId}/evidence`, data);
+    showToast('✅ 证据已添加');
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 添加失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 模态表单：侵权比对
+// ==========================================
+function openComparisonForm() {
+  openModal('📊 侵权比对报告', `
+    <div class="guide-box">
+      <span class="guide-icon">💡</span>
+      <div>请先使用<strong>智慧芽"防侵权检索Agent"</strong>完成正式侵权比对，输出《侵权比对报告》后再录入系统。</div>
+    </div>
+    <form id="comparison-form" onsubmit="submitComparison(event)">
+      <div class="form-group">
+        <label>比对状态</label>
+        <select class="form-select" name="comparison_status">
+          <option value="completed">✅ 比对完成</option>
+          <option value="in_progress">🔄 比对中</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>《侵权比对报告》摘要</label>
+        <textarea class="form-textarea" name="comparison_report" rows="5" placeholder="请粘贴智慧芽AI生成的侵权比对报告核心结论..."></textarea>
+      </div>
+      <div class="form-group">
+        <label>《维权策略方案》</label>
+        <textarea class="form-textarea" name="strategy_doc" rows="4" placeholder="建议的法律策略、行动计划、时间表等"></textarea>
+      </div>
+      <div class="form-group">
+        <label>外观设计比对结果（如有）</label>
+        <textarea class="form-textarea" name="design_comparison" rows="3" placeholder="外观专利图像搜索比对结论..."></textarea>
+      </div>
+      <input type="hidden" name="operator" value="">
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">📊 提交比对报告</button>
+      </div>
+    </form>
+  `);
+  // 稍后填充操作人
+  setTimeout(() => {
+    const opInput = document.querySelector('#comparison-form [name="operator"]');
+    if (opInput) opInput.value = 'IP部';
+  }, 100);
+}
+
+async function submitComparison(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.put(`/api/cases/${currentCaseId}/comparison`, data);
+    showToast('✅ 侵权比对报告已提交');
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 提交失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 模态表单：法律行动
+// ==========================================
+function openLegalForm() {
+  openModal('⚖️ 法律行动更新', `
+    <form id="legal-form" onsubmit="submitLegal(event)">
+      <div class="form-group">
+        <label>当前法律阶段</label>
+        <select class="form-select" name="legal_stage">
+          <option value="律师函发送">律师函发送</option>
+          <option value="协商谈判">协商谈判</option>
+          <option value="行政投诉">行政投诉</option>
+          <option value="立案">立案</option>
+          <option value="证据交换">证据交换</option>
+          <option value="开庭审理">开庭审理</option>
+          <option value="一审判决">一审判决</option>
+          <option value="二审/上诉">二审/上诉</option>
+          <option value="执行">执行</option>
+          <option value="结案">结案</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>法律行动状态</label>
+        <select class="form-select" name="legal_status">
+          <option value="in_progress">🔄 进行中</option>
+          <option value="completed">✅ 已结案</option>
+          <option value="pending">⏳ 待启动</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>备注/进展说明</label>
+        <textarea class="form-textarea" name="legal_notes" rows="4" placeholder="当前阶段进展、下一步计划、费用情况等"></textarea>
+      </div>
+      <input type="hidden" name="operator" value="法务部">
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-success">⚖️ 更新状态</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitLegal(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.put(`/api/cases/${currentCaseId}/legal`, data);
+    showToast('✅ 法律行动状态已更新');
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 更新失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 模态表单：添加期限
+// ==========================================
+function openDeadlineForm() {
+  openModal('⏰ 添加期限提醒', `
+    <form id="deadline-form" onsubmit="submitDeadline(event)">
+      <div class="form-group">
+        <label>期限名称 <span class="required">*</span></label>
+        <input class="form-input" name="title" required placeholder="如：起诉期限、举证期限、答辩期限">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>截止日期 <span class="required">*</span></label>
+          <input class="form-input" name="due_date" type="date" required>
+        </div>
+        <div class="form-group">
+          <label>期限类型</label>
+          <select class="form-select" name="deadline_type">
+            <option value="起诉期限">起诉期限</option>
+            <option value="举证期限">举证期限</option>
+            <option value="答辩期限">答辩期限</option>
+            <option value="官费缴纳">官费缴纳</option>
+            <option value="开庭日期">开庭日期</option>
+            <option value="上诉期限">上诉期限</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>提前提醒天数</label>
+          <input class="form-input" name="remind_days_before" type="number" value="7" min="1" max="30">
+        </div>
+        <div class="form-group">
+          <label>负责人</label>
+          <input class="form-input" name="responsible_person" placeholder="姓名">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">⏰ 添加</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitDeadline(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.post(`/api/cases/${currentCaseId}/deadlines`, data);
+    showToast('✅ 期限已添加');
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 添加失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 案件详情 - 标签页切换
+// ==========================================
+async function switchCaseTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  
+  const content = document.getElementById('case-tab-content');
+  if (!content || !currentCaseId) return;
+  
+  try {
+    const c = await API.get(`/api/cases/${currentCaseId}`);
+    
+    switch(tab) {
+      case 'timeline':
+        content.innerHTML = (c.timeline || []).length === 0
+          ? '<div class="empty-state"><h3>暂无动态</h3></div>'
+          : `<div class="timeline">${c.timeline.map(t => `
+            <div class="timeline-item">
+              <div class="tl-time">${formatTime(t.created_at)} · ${t.operator}</div>
+              <div class="tl-title">${t.event_type === 'lead_submit' ? '📥' : t.event_type === 'assessment' ? '🔍' : t.event_type === 'approval' ? '⚖️' : t.event_type === 'evidence' ? '📎' : t.event_type === 'comparison' ? '📊' : t.event_type === 'legal' ? '⚖️' : t.event_type === 'document' ? '📄' : '📌'} ${t.event_title}</div>
+              <div class="tl-detail">${t.event_detail || ''}</div>
+            </div>
+          `).join('')}</div>`;
+        break;
+        
+      case 'evidence':
+        content.innerHTML = (c.evidence || []).length === 0
+          ? `<div class="empty-state"><h3>暂无证据</h3><p>点击"添加证据"上传证据材料</p>
+             <button class="btn btn-primary btn-sm" style="margin-top:12px" onclick="openEvidenceForm()">📎 添加证据</button></div>`
+          : `<ul class="file-list">${c.evidence.map(e => `
+            <li>
+              <span class="file-icon">${e.file_type === 'pdf' ? '📕' : e.file_type?.startsWith('image') || e.file_type === 'jpg' ? '🖼️' : e.file_type?.startsWith('video') || e.file_type === 'mp4' ? '🎬' : '📎'}</span>
+              <div style="flex:1">
+                <strong>${e.file_name}</strong>
+                <div style="font-size:12px;color:var(--gray-500)">${e.evidence_type} · ${e.uploader || '未知'} · ${formatTime(e.created_at)}</div>
+                ${e.description ? `<div style="font-size:12px;color:var(--gray-400)">${e.description}</div>` : ''}
+              </div>
+            </div>
+          `).join('')}</ul>
+          <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="openEvidenceForm()">📎 继续添加</button>`;
+        break;
+        
+      case 'documents':
+        content.innerHTML = (c.documents || []).length === 0
+          ? `<div class="empty-state"><h3>暂无文档</h3><p>可在此归档《侵权比对报告》《维权策略方案》等文档</p>
+             <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="openDocumentForm()">📄 添加文档</button></div>`
+          : `<ul class="file-list">${c.documents.map(d => `
+            <li>
+              <span class="file-icon">📄</span>
+              <div style="flex:1">
+                <strong>${d.doc_name}</strong>
+                <div style="font-size:12px;color:var(--gray-500)">${d.doc_type} · ${d.doc_category} · ${d.uploader || '未知'} · ${formatTime(d.created_at)}</div>
+                ${d.description ? `<div style="font-size:12px;color:var(--gray-400)">${d.description}</div>` : ''}
+              </div>
+            </div>
+          `).join('')}</ul>
+          <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="openDocumentForm()">📄 添加文档</button>`;
+        break;
+        
+      case 'deadlines':
+        content.innerHTML = (c.deadlines || []).length === 0
+          ? `<div class="empty-state"><h3>暂无期限</h3><p>为案件关键节点设置期限提醒</p>
+             <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="openDeadlineForm()">⏰ 添加期限</button></div>`
+          : `<table>
+            <thead><tr><th>期限名称</th><th>类型</th><th>截止日期</th><th>状态</th><th>负责人</th><th>提醒</th></tr></thead>
+            <tbody>${c.deadlines.map(d => {
+              const isUrgent = new Date(d.due_date) <= new Date(Date.now() + 7*86400000);
+              return `
+              <tr>
+                <td><strong>${d.title}</strong></td>
+                <td>${d.deadline_type}</td>
+                <td style="${isUrgent ? 'color:var(--danger);font-weight:600' : ''}">${d.due_date}</td>
+                <td><span class="badge ${d.status==='completed'?'badge-success':isUrgent?'badge-danger':'badge-warning'}">${d.status==='completed'?'已完成':isUrgent?'即将到期':'待处理'}</span></td>
+                <td>${d.responsible_person || '-'}</td>
+                <td>提前${d.remind_days_before}天</td>
+              </tr>`;
+            }).join('')}</tbody></table>
+            <button class="btn btn-outline btn-sm" style="margin-top:12px" onclick="openDeadlineForm()">⏰ 添加期限</button>`;
+        break;
+    }
+  } catch(e) {
+    content.innerHTML = `<div class="empty-state"><h3>加载失败</h3><p>${e.message}</p></div>`;
+  }
+}
+
+// 添加文档
+function openDocumentForm() {
+  openModal('📄 添加文档', `
+    <form id="doc-form" onsubmit="submitDocument(event)">
+      <div class="form-group">
+        <label>文档名称 <span class="required">*</span></label>
+        <input class="form-input" name="doc_name" required placeholder="如：侵权比对报告_20240601">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>文档类型</label>
+          <select class="form-select" name="doc_type">
+            <option value="侵权比对报告">侵权比对报告</option>
+            <option value="维权策略方案">维权策略方案</option>
+            <option value="律师函">律师函</option>
+            <option value="起诉状">起诉状</option>
+            <option value="判决书">判决书</option>
+            <option value="和解协议">和解协议</option>
+            <option value="复盘报告">复盘报告</option>
+            <option value="其他">其他</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>分类</label>
+          <select class="form-select" name="doc_category">
+            <option value="诉讼文书">诉讼文书</option>
+            <option value="证据材料">证据材料</option>
+            <option value="分析报告">分析报告</option>
+            <option value="法院来文">法院来文</option>
+            <option value="内部文件">内部文件</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>上传人</label>
+          <input class="form-input" name="uploader" placeholder="姓名">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>描述</label>
+        <textarea class="form-textarea" name="description" rows="2"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">📄 添加</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitDocument(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.post(`/api/cases/${currentCaseId}/documents`, data);
+    showToast('✅ 文档已添加');
+    closeModal();
+    navigate('case-detail', { caseId: currentCaseId });
+  } catch(err) {
+    showToast('❌ 添加失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 页面：专利库
+// ==========================================
+async function renderPatentLibrary(container) {
+  container.innerHTML = `
+    <div class="page-header">
+      <h1>📜 专利库</h1>
+      <button class="btn btn-primary" onclick="openPatentForm()">➕ 添加专利</button>
+    </div>
+    <div class="search-bar">
+      <input class="form-input" id="patent-search" placeholder="🔍 搜索专利号/名称/技术特征..." oninput="filterPatents()">
+    </div>
+    <div class="card" id="patent-list-container">
+      <div style="text-align:center;padding:40px">加载中...</div>
+    </div>
+  `;
+  await filterPatents();
+}
+
+async function filterPatents() {
+  const container = document.getElementById('patent-list-container');
+  if (!container) return;
+  const keyword = document.getElementById('patent-search')?.value || '';
+  
+  try {
+    const patents = await API.get(`/api/patents?keyword=${encodeURIComponent(keyword)}`);
+    if (patents.length === 0) {
+      container.innerHTML = `<div class="card-body"><div class="empty-state"><h3>专利库为空</h3><p>添加公司已授权专利，用于维权时快速匹配</p></div></div>`;
+      return;
+    }
+    container.innerHTML = `<div class="card-body">${patents.map(p => `
+      <div class="patent-card">
+        <div class="patent-no">${p.patent_no}</div>
+        <div class="patent-name">${p.patent_name}</div>
+        <div class="patent-meta">
+          <span>类型：${p.patent_type || '-'}</span>
+          <span>申请人：${p.applicant || '-'}</span>
+          <span>状态：${p.status || '-'}</span>
+          <span>申请日：${p.filing_date || '-'}</span>
+          <span>授权日：${p.grant_date || '-'}</span>
+        </div>
+        ${p.tech_field ? `<div style="font-size:12px;color:var(--gray-500);margin-top:6px">技术领域：${p.tech_field}</div>` : ''}
+        ${p.key_features ? `<div style="font-size:12px;color:var(--gray-500)">关键特征：${p.key_features}</div>` : ''}
+      </div>
+    `).join('')}</div>`;
+  } catch(e) {
+    container.innerHTML = `<div class="card-body"><div class="empty-state"><h3>加载失败</h3></div></div>`;
+  }
+}
+
+function openPatentForm() {
+  openModal('➕ 添加专利', `
+    <form id="patent-form" onsubmit="submitPatent(event)">
+      <div class="form-row">
+        <div class="form-group">
+          <label>专利号 <span class="required">*</span></label>
+          <input class="form-input" name="patent_no" required placeholder="CN2024XXXXXX.X">
+        </div>
+        <div class="form-group">
+          <label>专利名称 <span class="required">*</span></label>
+          <input class="form-input" name="patent_name" required placeholder="发明专利名称">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>专利类型</label>
+          <select class="form-select" name="patent_type">
+            <option value="发明专利">发明专利</option>
+            <option value="实用新型">实用新型</option>
+            <option value="外观设计">外观设计</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>申请人</label>
+          <input class="form-input" name="applicant" placeholder="公司名称">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>法律状态</label>
+          <select class="form-select" name="status">
+            <option value="有权">有权</option>
+            <option value="审中">审中</option>
+            <option value="无权">无权</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>技术领域</label>
+          <input class="form-input" name="tech_field" placeholder="如：人工智能、通信">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>申请日</label>
+          <input class="form-input" name="filing_date" type="date">
+        </div>
+        <div class="form-group">
+          <label>授权日</label>
+          <input class="form-input" name="grant_date" type="date">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>关键技术特征</label>
+        <textarea class="form-textarea" name="key_features" rows="2" placeholder="描述该专利的核心技术特征，用于AI特征比对"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">📜 添加专利</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitPatent(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.post('/api/patents', data);
+    showToast('✅ 专利已添加');
+    closeModal();
+    navigate('patents');
+  } catch(err) {
+    showToast('❌ 添加失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 页面：竞对监控
+// ==========================================
+async function renderCompetitorMonitor(container) {
+  container.innerHTML = `
+    <div class="page-header">
+      <h1>🔍 竞对监控</h1>
+      <button class="btn btn-primary" onclick="openCompetitorForm()">➕ 添加竞对</button>
+    </div>
+    <div class="guide-box">
+      <span class="guide-icon">💡</span>
+      <div>
+        <strong>操作指引：</strong>
+        在此维护竞对公司列表，配合<strong>智慧芽专利检索网站</strong>设置竞对专利动态监控。<br>
+        系统将定期（每周/半月）自动提醒查看竞对新公开专利和法律状态变化。
+      </div>
+    </div>
+    <div class="card" id="competitor-list-container">
+      <div style="text-align:center;padding:40px">加载中...</div>
+    </div>
+  `;
+  await loadCompetitors();
+}
+
+async function loadCompetitors() {
+  const container = document.getElementById('competitor-list-container');
+  if (!container) return;
+  try {
+    const comps = await API.get('/api/competitors');
+    if (comps.length === 0) {
+      container.innerHTML = '<div class="card-body"><div class="empty-state"><h3>暂无竞对</h3><p>添加竞对公司，建立监控列表</p></div></div>';
+      return;
+    }
+    container.innerHTML = `
+      <div class="table-container">
+        <table>
+          <thead><tr><th>公司名称</th><th>别名</th><th>主要产品</th><th>监控关键词</th><th>告警</th><th>最近检查</th></tr></thead>
+          <tbody>
+            ${comps.map(c => `
+              <tr>
+                <td><strong>${c.name}</strong></td>
+                <td>${c.alias || '-'}</td>
+                <td>${c.products || '-'}</td>
+                <td>${c.monitor_keywords || '-'}</td>
+                <td>${c.alert_enabled ? '<span class="badge badge-success">已启用</span>' : '<span class="badge badge-gray">已关闭</span>'}</td>
+                <td>${c.last_check_time ? formatTime(c.last_check_time) : '未检查'}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch(e) {
+    container.innerHTML = `<div class="card-body"><div class="empty-state"><h3>加载失败</h3></div></div>`;
+  }
+}
+
+function openCompetitorForm() {
+  openModal('➕ 添加竞对公司', `
+    <form id="competitor-form" onsubmit="submitCompetitor(event)">
+      <div class="form-group">
+        <label>公司名称 <span class="required">*</span></label>
+        <input class="form-input" name="name" required placeholder="竞对公司全称">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>别名/简称</label>
+          <input class="form-input" name="alias" placeholder="如：XX科技">
+        </div>
+        <div class="form-group">
+          <label>启用告警</label>
+          <select class="form-select" name="alert_enabled">
+            <option value="1">✅ 启用</option>
+            <option value="0">❌ 关闭</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>主要产品</label>
+        <input class="form-input" name="products" placeholder="竞对主要产品线">
+      </div>
+      <div class="form-group">
+        <label>监控关键词（用逗号分隔）</label>
+        <input class="form-input" name="monitor_keywords" placeholder="如：AI芯片,自动驾驶,传感器">
+        <div class="form-hint">用于智慧芽专利检索网站设置监控条件</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button type="button" class="btn btn-outline" onclick="closeModal()">取消</button>
+        <button type="submit" class="btn btn-primary">🔍 添加</button>
+      </div>
+    </form>
+  `);
+}
+
+async function submitCompetitor(e) {
+  e.preventDefault();
+  const data = Object.fromEntries(new FormData(e.target));
+  try {
+    await API.post('/api/competitors', data);
+    showToast('✅ 竞对已添加');
+    closeModal();
+    navigate('competitors');
+  } catch(err) {
+    showToast('❌ 添加失败: ' + err.message, 'error');
+  }
+}
+
+// ==========================================
+// 页面：期限预警
+// ==========================================
+async function renderDeadlineMonitor(container) {
+  container.innerHTML = `
+    <div class="page-header">
+      <h1>⏰ 期限预警</h1>
+    </div>
+    <div class="card" id="deadline-monitor-container">
+      <div style="text-align:center;padding:40px">加载中...</div>
+    </div>
+  `;
+  
+  try {
+    const urgent = await API.get('/api/deadlines/urgent');
+    const container2 = document.getElementById('deadline-monitor-container');
+    
+    if (urgent.length === 0) {
+      container2.innerHTML = `<div class="card-body"><div class="empty-state"><div class="empty-icon">✅</div><h3>暂无紧急期限</h3><p>所有期限均在正常范围内</p></div></div>`;
+      return;
+    }
+    
+    container2.innerHTML = `
+      <div class="card-header"><h3>⚠️ 7天内到期的期限（${urgent.length}条）</h3></div>
+      <div class="table-container">
+        <table>
+          <thead><tr><th>案件</th><th>期限名称</th><th>类型</th><th>截止日期</th><th>剩余天数</th><th>负责人</th></tr></thead>
+          <tbody>
+            ${urgent.map(d => {
+              const daysLeft = Math.ceil((new Date(d.due_date) - new Date()) / 86400000);
+              return `
+              <tr>
+                <td><a href="#" onclick="navigate('case-detail',{caseId:'${d.case_id}'});return false" style="color:var(--primary);text-decoration:none">${d.case_no}</a></td>
+                <td><strong>${d.title}</strong></td>
+                <td>${d.deadline_type}</td>
+                <td style="color:var(--danger);font-weight:600">${d.due_date}</td>
+                <td><span class="badge ${daysLeft<=3?'badge-danger':'badge-warning'}">${daysLeft}天</span></td>
+                <td>${d.responsible_person || '-'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch(e) {
+    document.getElementById('deadline-monitor-container').innerHTML = `<div class="card-body"><div class="empty-state"><h3>加载失败</h3></div></div>`;
+  }
+}
+
+// ==========================================
+// 智慧芽集成页面
+// ==========================================
+async function renderPatSnapPage(container) {
+  let config = { configured: false, api_key_masked: '' };
+  try {
+    const resp = await fetch('/api/patsnap/config');
+    config = await resp.json();
+  } catch(e) {}
+
+  container.innerHTML = `
+    <div class="page-header">
+      <h2>🔬 智慧芽专利检索</h2>
+      <p class="page-desc">集成智慧芽全球专利数据库，支持AI语义检索、图像检索、法律状态查询</p>
+    </div>
+
+    <!-- API Key 配置区 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <span>🔑 API 配置</span>
+        <span class="badge ${config.configured ? 'badge-success' : 'badge-danger'}">${config.configured ? '已配置 ' + config.api_key_masked : '未配置'}</span>
+      </div>
+      <div class="card-body">
+        <p style="margin-bottom:12px;color:var(--text-secondary);font-size:13px">
+          前往 <a href="https://open.patsnap.com/devportal" target="_blank" style="color:var(--primary)">智慧芽开放平台</a> 注册并获取 API Key（免费10,000 credits，无需信用卡）
+        </p>
+        <div style="display:flex;gap:8px">
+          <input type="password" id="patsnap-apikey" placeholder="输入 sk- 开头的 API Key" 
+            style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px">
+          <button class="btn btn-primary btn-sm" onclick="savePatSnapKey()">💾 保存</button>
+        </div>
+        <p id="patsnap-config-msg" style="margin-top:8px;font-size:12px;color:var(--success);display:none"></p>
+      </div>
+    </div>
+
+    <!-- 检索功能区 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">🔎 专利语义检索</div>
+      <div class="card-body">
+        <div class="form-group">
+          <label>自然语言描述技术特征</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="patsnap-query" placeholder="例如：一种基于深度学习的图像识别方法..." 
+              style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px"
+              onkeydown="if(event.key==='Enter')searchPatSnap()">
+            <button class="btn btn-primary" onclick="searchPatSnap()">🔍 检索</button>
+          </div>
+        </div>
+        <div id="patsnap-search-result" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- 外观专利图像检索 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">🖼️ 外观专利图像检索</div>
+      <div class="card-body">
+        <div class="form-group">
+          <label>输入产品图片URL进行外观设计专利匹配</label>
+          <div style="display:flex;gap:8px">
+            <input type="text" id="patsnap-img-url" placeholder="https://example.com/product-image.jpg" 
+              style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px">
+            <button class="btn btn-primary" onclick="imageSearchPatSnap()">🖼️ 图像检索</button>
+          </div>
+        </div>
+        <div id="patsnap-img-result" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- 法律状态查询 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">⚖️ 专利法律状态查询</div>
+      <div class="card-body">
+        <div style="display:flex;gap:8px">
+          <input type="text" id="patsnap-patent-no" placeholder="输入专利号，如 CN123456789A" 
+            style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px">
+          <button class="btn btn-primary" onclick="queryLegalStatus()">⚖️ 查询</button>
+        </div>
+        <div id="patsnap-legal-result" style="margin-top:12px"></div>
+      </div>
+    </div>
+
+    <!-- 快捷入口 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">🚀 快捷入口</div>
+      <div class="card-body" style="display:flex;gap:12px;flex-wrap:wrap">
+        <a href="https://www.zhihuiya.com" target="_blank" class="btn btn-outline btn-sm">🌐 智慧芽官网</a>
+        <a href="https://open.patsnap.com/devportal" target="_blank" class="btn btn-outline btn-sm">📋 开放平台控制台</a>
+        <a href="https://www.zhihuiya.com/patent-search" target="_blank" class="btn btn-outline btn-sm">🔍 专利检索网站</a>
+        <a href="https://open.patsnap.com/devportal/guides" target="_blank" class="btn btn-outline btn-sm">📖 API开发文档</a>
+        <a href="https://open.zhihuiya.com/marketplace/mcp-servers/patsnap-search" target="_blank" class="btn btn-outline btn-sm">🔌 MCP Server</a>
+      </div>
+    </div>
+
+    <!-- WorkBuddy MCP 状态 -->
+    <div class="card">
+      <div class="card-header">🤖 WorkBuddy MCP 已配置</div>
+      <div class="card-body">
+        <table style="width:100%;font-size:13px">
+          <tr><td style="padding:4px 0"><strong>patsnap-patent-search</strong></td>
+            <td style="color:var(--text-secondary)">专利文献融合检索（语义搜索）</td></tr>
+          <tr><td style="padding:4px 0"><strong>patsnap-core-patent</strong></td>
+            <td style="color:var(--text-secondary)">核心专利数据库（详情/法律状态/引用）</td></tr>
+        </table>
+        <p style="margin-top:12px;font-size:12px;color:var(--warning);line-height:1.6">
+          ⚠️ 获取 API Key 后，将 <code>~/.workbuddy/mcp.json</code> 中的 <code>YOUR_PATSNAP_API_KEY</code> 替换为真实 Key，然后在连接器管理中 "Trust" 即可激活 MCP。
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+async function savePatSnapKey() {
+  const key = document.getElementById('patsnap-apikey').value.trim();
+  if (!key) return showToast('请输入 API Key', 'warning');
+  if (!key.startsWith('sk-')) return showToast('API Key 应以 sk- 开头', 'warning');
+  
+  try {
+    const resp = await fetch('/api/patsnap/config', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({api_key: key})
+    });
+    const data = await resp.json();
+    if (data.success) {
+      showToast('API Key 已保存');
+      renderPatSnapPage(document.getElementById('page-content'));
+    }
+  } catch(e) {
+    showToast('保存失败: ' + e.message, 'error');
+  }
+}
+
+async function searchPatSnap() {
+  const query = document.getElementById('patsnap-query').value.trim();
+  if (!query) return showToast('请输入搜索内容', 'warning');
+  const resultDiv = document.getElementById('patsnap-search-result');
+  resultDiv.innerHTML = '<div class="loading">检索中...</div>';
+  
+  try {
+    const resp = await fetch('/api/patsnap/search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({query})
+    });
+    const data = await resp.json();
+    if (data.error) {
+      resultDiv.innerHTML = `<div class="alert alert-warning">${data.error}</div>`;
+    } else {
+      resultDiv.innerHTML = renderSearchResults(data);
+    }
+  } catch(e) {
+    resultDiv.innerHTML = `<div class="alert alert-danger">请求失败: ${e.message}</div>`;
+  }
+}
+
+async function imageSearchPatSnap() {
+  const url = document.getElementById('patsnap-img-url').value.trim();
+  if (!url) return showToast('请输入图片URL', 'warning');
+  const resultDiv = document.getElementById('patsnap-img-result');
+  resultDiv.innerHTML = '<div class="loading">图像检索中...</div>';
+  
+  try {
+    const resp = await fetch('/api/patsnap/image-search', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({image_url: url})
+    });
+    const data = await resp.json();
+    if (data.error) {
+      resultDiv.innerHTML = `<div class="alert alert-warning">${data.error}</div>`;
+    } else {
+      resultDiv.innerHTML = renderImageSearchResults(data);
+    }
+  } catch(e) {
+    resultDiv.innerHTML = `<div class="alert alert-danger">请求失败: ${e.message}</div>`;
+  }
+}
+
+async function queryLegalStatus() {
+  const patentNo = document.getElementById('patsnap-patent-no').value.trim();
+  if (!patentNo) return showToast('请输入专利号', 'warning');
+  const resultDiv = document.getElementById('patsnap-legal-result');
+  resultDiv.innerHTML = '<div class="loading">查询中...</div>';
+  
+  try {
+    const resp = await fetch('/api/patsnap/legal-status?patent_no=' + encodeURIComponent(patentNo));
+    const data = await resp.json();
+    if (data.error) {
+      resultDiv.innerHTML = `<div class="alert alert-warning">${data.error}</div>`;
+    } else {
+      resultDiv.innerHTML = renderLegalStatusResults(data);
+    }
+  } catch(e) {
+    resultDiv.innerHTML = `<div class="alert alert-danger">请求失败: ${e.message}</div>`;
+  }
+}
+
+// ==========================================
+// 智慧芽结果渲染
+// ==========================================
+
+function formatDate(yyyymmdd) {
+  if (!yyyymmdd) return '-';
+  const s = String(yyyymmdd);
+  return s.slice(0,4) + '-' + s.slice(4,6) + '-' + s.slice(6,8);
+}
+
+function truncate(str, len) {
+  if (!str) return '-';
+  return str.length > len ? str.slice(0, len) + '...' : str;
+}
+
+function renderSearchResults(data) {
+  const inner = (data.data && data.data.data) ? data.data.data : data;
+  const results = inner.results || [];
+  const total = inner.total_search_result_count || results.length;
+  if (results.length === 0) {
+    return '<div class="alert alert-info">未找到相关专利，请尝试其他关键词</div>';
+  }
+
+  let html = `<div style="margin-bottom:8px;font-weight:600;font-size:14px">🔍 共找到 <span style="color:var(--primary)">${total.toLocaleString()}</span> 件相关专利，显示前 ${results.length} 条</div>`;
+  
+  results.forEach((r, i) => {
+    const rid = 'pat_' + i;
+    const bg = i % 2 === 0 ? 'var(--bg-secondary)' : 'transparent';
+    const relevancy = parseFloat(r.relevancy) || 0;
+    const relColor = relevancy >= 80 ? 'var(--success)' : relevancy >= 60 ? 'var(--warning)' : 'var(--text-secondary)';
+
+    html += `<div style="background:${bg};border:1px solid var(--border);border-radius:6px;margin-bottom:8px;overflow:hidden">
+      <div class="pat-row" data-target="${rid}" style="cursor:pointer;display:flex;align-items:center;padding:10px 14px;gap:12px;user-select:none;transition:background .15s"
+           onmouseover="this.style.background='var(--hover-bg)'" onmouseout="this.style.background='${bg}'">
+        <span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);width:22px">${i+1}</span>
+        <span style="font-family:monospace;font-weight:700;font-size:14px;color:var(--primary);flex:0 0 auto;min-width:130px">${r.pn || '-'}</span>
+        <span style="flex:1;font-size:13px;line-height:1.4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.title||'').replace(/"/g,'&quot;')}">${r.title || '-'}</span>
+        <span style="flex:0 0 auto;font-size:12px;color:var(--text-secondary);min-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${(r.current_assignee||'').replace(/"/g,'&quot;')}">${truncate(r.current_assignee, 18)}</span>
+        <span style="flex:0 0 auto;font-weight:600;font-size:13px;color:${relColor};min-width:42px;text-align:center">${r.relevancy || '-'}</span>
+        <span style="flex:0 0 auto;font-size:11px;color:var(--text-secondary);width:18px;text-align:center">▶</span>
+      </div>
+      <div id="${rid}" style="display:none;padding:0 14px 14px;border-top:1px solid var(--border);background:var(--bg);font-size:13px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px;margin-top:12px">
+          <div><label style="color:var(--text-secondary);font-size:11px">专利号</label><div style="font-family:monospace;font-weight:600">${r.pn || '-'}</div></div>
+          <div><label style="color:var(--text-secondary);font-size:11px">申请号</label><div style="font-family:monospace">${r.apno || '-'}</div></div>
+          <div><label style="color:var(--text-secondary);font-size:11px">申请日</label><div>${formatDate(r.apdt)}</div></div>
+          <div><label style="color:var(--text-secondary);font-size:11px">公开日</label><div>${formatDate(r.pbdt)}</div></div>
+          <div style="grid-column:1/-1"><label style="color:var(--text-secondary);font-size:11px">地址</label><div style="font-size:12px">${r.current_assignee_address || '-'}</div></div>
+          <div style="grid-column:1/-1"><label style="color:var(--text-secondary);font-size:11px">发明人</label><div>${(r.inventor||'-').replace(/\|/g,' &middot; ')}</div></div>
+        </div>
+        <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-sm" style="font-size:12px" onclick="event.stopPropagation();window.open('https://analytics.zhihuiya.com/patent/'+encodeURIComponent('${r.pn||''}'),'_blank')">🔗 专利号检索</button>
+          <button class="btn btn-outline btn-sm" style="font-size:12px" onclick="event.stopPropagation();navigator.clipboard.writeText('${r.pn||''}');showToast('已复制: ${r.pn||''}')">📋 复制专利号</button>
+          <a href="#" onclick="event.stopPropagation();event.preventDefault();document.getElementById('patsnap-patent-no').value='${r.pn||''}';window.scrollTo(0,0);return false" class="btn btn-outline btn-sm" style="font-size:12px">⚖ 查法律状态</a>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  html += `<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">💡 点击每条专利展开详情 | 数据来自智慧芽语义检索 API</div>`;
+  return html;
+}
+
+// 搜索结果展开/折叠
+document.addEventListener('click', function(e) {
+  const row = e.target.closest('.pat-row');
+  if (row) {
+    const targetId = row.getAttribute('data-target');
+    const detail = document.getElementById(targetId);
+    if (detail) {
+      const arrow = row.querySelector('span:last-child');
+      if (detail.style.display === 'none') {
+        detail.style.display = 'block';
+        if (arrow) arrow.textContent = '▼';
+      } else {
+        detail.style.display = 'none';
+        if (arrow) arrow.textContent = '▶';
+      }
+    }
+  }
+});
+
+function renderImageSearchResults(data) {
+  const inner = (data.data && data.data.data) ? data.data.data : data;
+  const results = inner.results || [];
+  const total = inner.total_search_result_count || results.length;
+  if (results.length === 0) {
+    return '<div class="alert alert-info">未找到匹配的外观设计专利</div>';
+  }
+
+  let html = `<div style="margin-bottom:8px;font-weight:600;font-size:14px">🖼 共找到 <span style="color:var(--primary)">${total.toLocaleString()}</span> 件外观匹配，显示前 ${results.length} 条</div>`;
+  html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">';
+  html += '<thead><tr style="background:var(--bg-secondary);text-align:left">';
+  html += '<th style="padding:8px">专利号</th>';
+  html += '<th style="padding:8px">标题</th>';
+  html += '<th style="padding:8px">专利权人</th>';
+  html += '<th style="padding:8px;text-align:center">相似度</th>';
+  html += '</tr></thead><tbody>';
+
+  results.forEach((r, i) => {
+    const bg = i % 2 === 0 ? 'var(--bg-secondary)' : 'transparent';
+    html += `<tr style="background:${bg};border-bottom:1px solid var(--border)">
+      <td style="padding:8px;font-family:monospace;white-space:nowrap"><span style="color:var(--primary);font-weight:600;cursor:pointer" onclick="event.stopPropagation();navigator.clipboard.writeText('${r.pn||''}');showToast('已复制: ${r.pn||''}')" title="点击复制">${r.pn || '-'}</span></td>
+      <td style="padding:8px;line-height:1.4">${truncate(r.title, 60)}</td>
+      <td style="padding:8px;font-size:12px">${truncate(r.current_assignee, 30)}</td>
+      <td style="padding:8px;text-align:center;font-weight:600;color:var(--primary)">${r.relevancy || '-'}</td>
+    </tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function renderLegalStatusResults(data) {
+  // data = {success: true, data: {status: true, data: [{pn, patsnap_legal_data: {inpadoc_legal_data: [...]}}]}}
+  const inner = (data.data && data.data.data) ? data.data.data : data;
+  const items = Array.isArray(inner) ? inner : (inner.results || []);
+  
+  if (items.length === 0) {
+    return '<div class="alert alert-info">未找到该专利的法律状态信息</div>';
+  }
+
+  let html = '';
+  items.forEach(item => {
+    const legal = item.patsnap_legal_data || {};
+    const inpEvents = legal.inpadoc_legal_data || [];
+    const cnEvents = legal.cn_legal_data || [];
+    const allEvents = [...inpEvents, ...cnEvents];
+    
+    html += `<div style="margin-bottom:8px;font-weight:600;font-size:14px">⚖ 专利号：<span style="font-family:monospace;color:var(--primary)">${item.pn || '-'}</span></div>`;
+    
+    if (allEvents.length === 0) {
+      html += '<div class="alert alert-info">暂无法律事件记录</div>';
+    } else {
+      html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">';
+      html += '<thead><tr style="background:var(--bg-secondary);text-align:left">';
+      html += '<th style="padding:8px;white-space:nowrap">事件日期</th>';
+      html += '<th style="padding:8px;white-space:nowrap">事件代码</th>';
+      html += '<th style="padding:8px">事件描述</th>';
+      html += '</tr></thead><tbody>';
+
+      allEvents.sort((a, b) => (b.event_date || 0) - (a.event_date || 0)).forEach((evt, i) => {
+        const bg = i % 2 === 0 ? 'var(--bg-secondary)' : 'transparent';
+        html += `<tr style="background:${bg};border-bottom:1px solid var(--border)">
+          <td style="padding:8px;white-space:nowrap;font-size:12px">${formatDate(evt.event_date)}</td>
+          <td style="padding:8px;font-family:monospace;font-size:12px">${evt.event_code || '-'}</td>
+          <td style="padding:8px;font-size:12px">${truncate(evt.event_desc, 80)}</td>
+        </tr>`;
+      });
+
+      html += '</tbody></table></div>';
+    }
+  });
+
+  html += '<div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">💡 以上为 INPADOC 法律事件 | 用于判断专利有效性和稳定性</div>';
+  return html;
+}
+
+// ==========================================
+// 初始化
+// ==========================================
+document.addEventListener('DOMContentLoaded', () => {
+  renderPage('dashboard');
+});
+</script>
+</body>
+</html>
