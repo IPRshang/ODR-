@@ -61,8 +61,155 @@
 
 <script>
 // ==========================================
-// API 工具
+// 演示数据回退层（后端不可用时自动启用）
 // ==========================================
+const DEMO_DATA = {
+  '/api/dashboard/stats': {
+    total_cases: 6, monthly_new: 2, urgent_deadlines: 3,
+    stage_distribution: {stage_1:1,stage_2:1,stage_3:1,stage_4:1,stage_5:1,stage_6:1},
+    status_distribution: {pending:2,in_progress:3,completed:1,rejected:0}
+  },
+  '/api/dashboard/activities': [
+    {id:1,case_id:'a1',case_no:'WQ20260728001',title:'某电商平台涉嫌外观侵权',event_type:'legal',event_title:'法律行动更新',event_detail:'已发送律师函',operator:'法务部',created_at:'2026-07-28 09:30'},
+    {id:2,case_id:'b2',case_no:'WQ20260727001',title:'发明专利技术特征比对',event_type:'comparison',event_title:'侵权比对完成',event_detail:'7项权利要求命中5项',operator:'技术部',created_at:'2026-07-27 14:20'},
+    {id:3,case_id:'c3',case_no:'WQ20260726001',title:'竞品包装设计抄袭调查',event_type:'evidence',event_title:'证据上传',event_detail:'公证购买截图3张',operator:'调查员',created_at:'2026-07-26 10:15'},
+    {id:4,case_id:'d4',case_no:'WQ20260725001',title:'软件界面UI侵权分析',event_type:'approval',event_title:'管理层审批: 批准启动',event_detail:'预算8000元',operator:'总监',created_at:'2026-07-25 16:00'},
+    {id:5,case_id:'e5',case_no:'WQ20260724001',title:'机械结构专利侵权线索',event_type:'assessment',event_title:'初步评估完成',event_detail:'高度相关，建议启动',operator:'专利工程师',created_at:'2026-07-24 11:30'}
+  ],
+  '/api/cases': [
+    {id:'a1',case_no:'WQ20260728001',title:'某电商平台涉嫌外观侵权',current_stage:6,stage_status:'in_progress',priority:'urgent',reporter:'张三',reporter_dept:'法务部',report_time:'2026-07-28 08:00',competitor_name:'某科技有限公司',infringing_product:'仿冒外壳设计',lead_description:'线上发现疑似侵权产品，外观高度相似'},
+    {id:'b2',case_no:'WQ20260727001',title:'发明专利技术特征比对',current_stage:5,stage_status:'in_progress',priority:'high',reporter:'李四',reporter_dept:'技术部',report_time:'2026-07-27 09:00',competitor_name:'某智能科技',infringing_product:'核心算法实现',lead_description:'技术比对发现关键特征重叠'},
+    {id:'c3',case_no:'WQ20260726001',title:'竞品包装设计抄袭调查',current_stage:4,stage_status:'in_progress',priority:'high',reporter:'王五',reporter_dept:'市场部',report_time:'2026-07-26 08:00',competitor_name:'某日化品牌',infringing_product:'洗护包装设计',lead_description:'市场发现高度相似包装'},
+    {id:'d4',case_no:'WQ20260725001',title:'软件界面UI侵权分析',current_stage:3,stage_status:'pending',priority:'normal',reporter:'赵六',reporter_dept:'产品部',report_time:'2026-07-25 10:00',competitor_name:'某软件公司',infringing_product:'APP界面设计',lead_description:'用户反馈界面高度雷同'},
+    {id:'e5',case_no:'WQ20260724001',title:'机械结构专利侵权线索',current_stage:2,stage_status:'pending',priority:'normal',reporter:'钱七',reporter_dept:'研发部',report_time:'2026-07-24 08:00',competitor_name:'某机械制造',infringing_product:'传动装置结构',lead_description:'展会发现疑似侵权产品'},
+    {id:'f6',case_no:'WQ20260723001',title:'新材料配方侵权调查',current_stage:1,stage_status:'pending',priority:'urgent',reporter:'孙八',reporter_dept:'研发部',report_time:'2026-07-23 09:00',competitor_name:'某材料科技',infringing_product:'高分子配方',lead_description:'检测报告显示成分高度一致'}
+  ],
+  '/api/cases/a1': {
+    id:'a1',case_no:'WQ20260728001',title:'某电商平台涉嫌外观侵权',current_stage:6,stage_status:'in_progress',priority:'urgent',
+    reporter:'张三',reporter_dept:'法务部',report_time:'2026-07-28 08:00',report_location:'线上电商平台',
+    competitor_name:'某科技有限公司',infringing_product:'仿冒外壳设计',lead_description:'线上发现疑似侵权产品，外观高度相似',
+    assessor:'专利工程师A',assessment_time:'2026-07-28 09:00',assessment_result:'高度相关',assessment_detail:'设计特征高度重叠，建议启动维权',
+    approval_status:'approved',approval_decision:'approved',approval_comment:'同意启动',approval_time:'2026-07-28 10:00',approver:'法务总监',
+    evidence_status:'completed',comparison_status:'completed',legal_status:'in_progress',legal_stage:'已发律师函',
+    timeline:[
+      {id:1,case_id:'a1',event_type:'legal',event_title:'法律行动更新',event_detail:'已发送律师函',operator:'法务部',created_at:'2026-07-28 09:30'},
+      {id:2,case_id:'a1',event_type:'comparison',event_title:'侵权比对完成',event_detail:'7项权利要求命中5项',operator:'技术部',created_at:'2026-07-28 09:00'},
+      {id:3,case_id:'a1',event_type:'evidence',event_title:'证据上传',event_detail:'公证购买截图3张',operator:'调查员',created_at:'2026-07-28 08:30'},
+      {id:4,case_id:'a1',event_type:'approval',event_title:'管理层审批: 批准启动',event_detail:'预算8000元',operator:'总监',created_at:'2026-07-28 08:00'},
+      {id:5,case_id:'a1',event_type:'assessment',event_title:'初步评估完成',event_detail:'评估结论: 高度相关',operator:'专利工程师',created_at:'2026-07-28 07:30'},
+      {id:6,case_id:'a1',event_type:'lead_submit',event_title:'线索提报',event_detail:'案件编号: WQ20260728001',operator:'张三',created_at:'2026-07-28 07:00'}
+    ],
+    evidence:[
+      {id:'ev1',case_id:'a1',file_name:'公证购买截图1.png',file_type:'image',evidence_type:'购买记录',uploader:'调查员',description:'电商平台下单截图',created_at:'2026-07-28 08:30'},
+      {id:'ev2',case_id:'a1',file_name:'侵权产品对比.jpg',file_type:'image',evidence_type:'侵权对比',uploader:'调查员',description:'原品与侵权品对比',created_at:'2026-07-28 08:35'}
+    ],
+    documents:[],
+    deadlines:[
+      {id:'dl1',case_id:'a1',title:'律师函回复期限',deadline_type:'response',due_date:'2026-08-05',status:'pending',remind_days_before:3,responsible_person:'法务部',created_at:'2026-07-28 09:30'}
+    ]
+  },
+  '/api/patents': [
+    {id:'p1',patent_no:'CN202430001234.5',patent_name:'一种智能设备外观设计',patent_type:'外观设计',applicant:'本公司',status:'有效',filing_date:'2024-01-15',grant_date:'2024-06-20',tech_field:'外观设计',key_features:'独特圆角设计，一体化成型',created_at:'2026-07-20 10:00'},
+    {id:'p2',patent_no:'CN202310567890.2',patent_name:'核心算法优化方法',patent_type:'发明专利',applicant:'本公司',status:'有效',filing_date:'2023-03-10',grant_date:'2023-12-15',tech_field:'计算机科学',key_features:'自适应学习率调整算法',created_at:'2026-07-20 10:01'},
+    {id:'p3',patent_no:'CN202420345678.7',patent_name:'传动装置结构改进',patent_type:'实用新型',applicant:'本公司',status:'有效',filing_date:'2024-05-20',grant_date:'2024-10-01',tech_field:'机械工程',key_features:'双齿轮传动结构',created_at:'2026-07-20 10:02'}
+  ],
+  '/api/competitors': [
+    {id:'c1',name:'某科技有限公司',alias:'某科技',products:'智能设备',monitor_keywords:'外壳设计,外观',alert_enabled:1,last_check_time:'2026-07-27',created_at:'2026-07-01 10:00'},
+    {id:'c2',name:'某智能科技',alias:'某智能',products:'算法软件',monitor_keywords:'核心算法,优化方法',alert_enabled:1,last_check_time:'2026-07-26',created_at:'2026-07-01 10:01'},
+    {id:'c3',name:'某日化品牌',alias:'某日化',products:'洗护产品',monitor_keywords:'包装设计,瓶身',alert_enabled:1,last_check_time:'2026-07-25',created_at:'2026-07-01 10:02'}
+  ],
+  '/api/deadlines/urgent': [
+    {id:'dl1',case_id:'a1',case_no:'WQ20260728001',case_title:'某电商平台涉嫌外观侵权',title:'律师函回复期限',deadline_type:'response',due_date:'2026-08-05',status:'pending',remind_days_before:3,responsible_person:'法务部'},
+    {id:'dl2',case_id:'b2',case_no:'WQ20260727001',case_title:'发明专利技术特征比对',title:'比对报告提交',deadline_type:'submission',due_date:'2026-08-02',status:'pending',remind_days_before:5,responsible_person:'技术部'},
+    {id:'dl3',case_id:'c3',case_no:'WQ20260726001',case_title:'竞品包装设计抄袭调查',title:'公证材料补充',deadline_type:'evidence',due_date:'2026-07-30',status:'pending',remind_days_before:3,responsible_person:'调查员'}
+  ],
+  '/api/patsnap/config': {configured:false,api_key_masked:'',auto_search_enabled:false}
+};
+
+let _demoMode = false;
+
+// 检测后端是否可用（首次请求时检测）
+async function _checkBackend() {
+  if (_demoMode) return false;
+  try {
+    const res = await fetch('/api/health', {signal: AbortSignal.timeout(3000)});
+    if (res.ok) { _demoMode = false; return true; }
+  } catch(e) {}
+  _demoMode = true;
+  _showDemoBanner();
+  return false;
+}
+
+function _showDemoBanner() {
+  if (document.getElementById('demo-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'demo-banner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:linear-gradient(90deg,#ff6b35,#f7931e);color:#fff;text-align:center;font-size:13px;padding:6px;font-weight:600';
+  banner.innerHTML = '演示模式 - 后端未连接，显示示例数据。如需完整功能请运行 Flask 后端。';
+  document.body.insertBefore(banner, document.body.firstChild);
+  document.body.style.paddingTop = '32px';
+}
+
+// 伪造数据路由匹配
+function _matchDemoRoute(url) {
+  // 精确匹配
+  if (DEMO_DATA[url]) return DEMO_DATA[url];
+  // /api/cases?xxx → 案件列表
+  if (url.startsWith('/api/cases?')) return DEMO_DATA['/api/cases'];
+  // /api/cases/{id} → 单个案件
+  const caseMatch = url.match(/^\/api\/cases\/([a-f0-9]+)/);
+  if (caseMatch) {
+    const c = DEMO_DATA['/api/cases/a1'];
+    return {...c, id: caseMatch[1], case_no: 'WQ'+caseMatch[1]};
+  }
+  // /api/patents?xxx → 专利列表
+  if (url.startsWith('/api/patents')) return DEMO_DATA['/api/patents'];
+  // /api/dashboard/activities
+  if (url.startsWith('/api/dashboard/activities')) return DEMO_DATA['/api/dashboard/activities'];
+  return null;
+}
+
+// ==========================================
+// API 工具（带后端检测回退）
+// ==========================================
+const _origFetch = window.fetch;
+window.fetch = async function(url, opts) {
+  const isApi = typeof url === 'string' && url.startsWith('/api/');
+  if (!isApi) return _origFetch.apply(this, arguments);
+
+  try {
+    const res = await _origFetch.call(this, url, opts);
+    if (res.ok) return res;
+    throw new Error('HTTP ' + res.status);
+  } catch(e) {
+    // 后端不可用，返回演示数据
+    if (!_demoMode) { _demoMode = true; _showDemoBanner(); }
+
+    const demo = _matchDemoRoute(url);
+    if (demo !== null) {
+      return {
+        ok: true, status: 200,
+        json: async () => demo,
+        text: async () => JSON.stringify(demo)
+      };
+    }
+    // POST/PUT 操作在演示模式下返回成功
+    if (opts && (opts.method === 'POST' || opts.method === 'PUT')) {
+      return {
+        ok: true, status: 200,
+        json: async () => ({success:true, id:'demo_'+Date.now()}),
+        text: async () => '{"success":true}'
+      };
+    }
+    // 无匹配数据
+    return {
+      ok: true, status: 200,
+      json: async () => [],
+      text: async () => '[]'
+    };
+  }
+};
+
 const API = {
   async get(url) {
     const res = await fetch(url);
